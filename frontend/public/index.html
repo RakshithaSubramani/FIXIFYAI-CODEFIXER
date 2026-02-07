@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0a0a0f" />
+    <meta name="description" content="FIXIFYAI - AI-Powered Code Debugger & Optimizer. Fix, analyze, and optimize your code with cutting-edge AI technology." />
+    <title>FIXIFYAI | AI Code Debugger</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #0a0a0f;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+      /* Loading screen */
+      #root:empty::before {
+        content: 'INITIALIZING...';
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        font-family: 'Courier New', monospace;
+        font-size: 1.2rem;
+        letter-spacing: 4px;
+        color: #00f5ff;
+        text-shadow: 0 0 20px #00f5ff;
+        animation: blink 1s ease-in-out infinite;
+      }
+      @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+    </style>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>
