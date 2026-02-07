@@ -9,7 +9,7 @@ FIXIFYAI is a full-stack project that turns “paste buggy code” into a struct
 - optional optimized version
 - diff view + history (stored in MongoDB)
 
-## What makes it resume-worthy (novel bits)
+## Novel bits
 
 - **Structured outputs**: the model is instructed to return **machine-validated JSON**, which the UI renders into sections reliably (instead of brittle regex parsing).
 - **Evidence-first reports**: each detected problem includes **severity**, **approx line**, and a **snippet** so users can verify claims quickly.
