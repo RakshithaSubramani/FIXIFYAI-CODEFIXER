@@ -63,3 +63,16 @@ Frontend:
 - `POST /api/fix` — returns `{ fixedCode, explanation, report, model }`
 - `POST /api/analyze` — returns `{ report, model }`
 - `GET /api/history` — recent requests (empty if Mongo is not configured)
+
+## Push to GitHub (fix “src refspec main does not match any”)
+
+That error usually means you have **no commits yet** or your branch is named **master** instead of **main**.
+
+From the project root:
+
+- `git init`
+- `git add .`
+- `git commit -m "Initial commit"`
+- `git branch -M main`
+- `git remote add origin https://github.com/<YOUR_USERNAME>/<YOUR_REPO>.git`
+- `git push -u origin main`

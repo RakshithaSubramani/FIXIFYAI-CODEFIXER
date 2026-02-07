@@ -88,6 +88,21 @@ body::after {
   z-index: 1;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+
+.checkbox-row input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--neon-cyan);
+}
+
 /* === Header === */
 .header {
   text-align: center;

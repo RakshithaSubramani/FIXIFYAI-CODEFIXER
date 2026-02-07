@@ -8,6 +8,7 @@ import './App.css';
 function App() {
   const [code, setCode] = useState('');
   const [language, setLanguage] = useState('javascript');
+  const [autoDetect, setAutoDetect] = useState(false);
   const [fixedCode, setFixedCode] = useState('');
   const [explanation, setExplanation] = useState('');
   const [report, setReport] = useState(null);
@@ -16,11 +17,23 @@ function App() {
 
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
+  const detectLanguage = (text) => {
+    const lines = String(text || '').split(/\r?\n/).slice(0, 50).join('\n');
+    if (/#include\s+[<"].+[>"]/.test(lines) || /\bstd::\b/.test(lines)) return 'cpp';
+    if (/^\s*package\s+\w+/m.test(lines) || /\bpublic\s+class\b/.test(lines)) return 'java';
+    if (/^\s*def\s+\w+\(.*\)\s*:/m.test(lines) || /^\s*import\s+\w+/m.test(lines)) return 'python';
+    if (/\binterface\s+\w+/.test(lines) || /:\s*(string|number|boolean|any|unknown|never)\b/.test(lines)) return 'typescript';
+    if (/^\s*func\s+\w+\(.*\)\s*\{/m.test(lines) || /\bfmt\.(Print|Println|Printf)\b/.test(lines)) return 'go';
+    return 'javascript';
+  };
+
   const handleFix = async () => {
     if (!code.trim()) return alert('Paste some code!');
     try {
       setLoading(true);
-      const { data } = await axios.post(`${API_URL}/api/fix`, { code, language });
+      const langToSend = autoDetect ? detectLanguage(code) : language;
+      if (autoDetect) setLanguage(langToSend);
+      const { data } = await axios.post(`${API_URL}/api/fix`, { code, language: langToSend });
       const nextReport = data.report || null;
       setReport(nextReport);
       setFixedCode(nextReport?.correctedCode || data.fixedCode || '');
@@ -68,6 +81,14 @@ function App() {
           <option value="go">Go</option>
           <option value="typescript">TypeScript</option>
         </select>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={autoDetect}
+            onChange={(e) => setAutoDetect(e.target.checked)}
+          />
+          Auto-detect language from code
+        </label>
 
         <label className="input-label">
           <span className="label-icon">💻</span>

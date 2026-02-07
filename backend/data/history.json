@@ -167,5 +167,38 @@
     },
     "model": "gemini-2.5-flash",
     "createdAt": "2026-02-06T16:40:59.975Z"
+  },
+  {
+    "originalCode": "#include <iostream>\nusing namespace std;\n\nint sum(int* a, int n) {\n    int s = 0;\n    for (int i = 0; i <= n; i++) {\n        s += *(a + i);\n    }\n    return s;\n}\n\nint main() {\n    int arr[3] = {2, 4, 6};\n    cout << sum(arr, 3);\n}\n",
+    "language": "cpp",
+    "fixedCode": "#include <iostream>\nusing namespace std;\n\nint sum(int* a, int n) {\n    int s = 0;\n    // Fix: Changed loop condition from i <= n to i < n to prevent out-of-bounds access.\n    // For an array of size n, valid indices are 0 to n-1.\n    for (int i = 0; i < n; i++) {\n        s += *(a + i);\n    }\n    return s;\n}\n\nint main() {\n    int arr[3] = {2, 4, 6};\n    cout << sum(arr, 3);\n}",
+    "explanation": "Analysis:\nThe provided C++ code defines a function `sum` that calculates the sum of elements in an integer array. The `main` function initializes an array `arr` of size 3 and calls `sum` with `arr` and its size. The core issue lies within the `sum` function's loop condition, which leads to an out-of-bounds array access.\n\nDetected Problems:\n- [low] (bad_practice) C:\\Users\\S Rakshita\\AppData\\Local\\Programs\\Python\\Python310\\python.exe: No module named cpplint\n- [high] (logic) The `sum` function attempts to access elements beyond the bounds of the array. The loop condition `i <= n` causes an out-of-bounds read when `i` equals `n`, as array indices for an array of size `n` typically range from `0` to `n-1`. In this case, `arr` has 3 elements (indices 0, 1, 2), but the loop tries to access `arr[3]` when `n` is 3. (line ~7)\n\nFixes & Explanations:\n- Change the loop condition in the `sum` function from `i <= n` to `i < n`.\n  - Why: To prevent out-of-bounds array access. If `n` represents the number of elements, valid indices are `0` to `n-1`. The original condition `i <= n` would attempt to access `n+1` elements, going one element past the end of the array.",
+    "report": {
+      "analysis": "The provided C++ code defines a function `sum` that calculates the sum of elements in an integer array. The `main` function initializes an array `arr` of size 3 and calls `sum` with `arr` and its size. The core issue lies within the `sum` function's loop condition, which leads to an out-of-bounds array access.",
+      "detectedProblems": [
+        {
+          "type": "bad_practice",
+          "severity": "low",
+          "message": "C:\\Users\\S Rakshita\\AppData\\Local\\Programs\\Python\\Python310\\python.exe: No module named cpplint"
+        },
+        {
+          "type": "logic",
+          "severity": "high",
+          "message": "The `sum` function attempts to access elements beyond the bounds of the array. The loop condition `i <= n` causes an out-of-bounds read when `i` equals `n`, as array indices for an array of size `n` typically range from `0` to `n-1`. In this case, `arr` has 3 elements (indices 0, 1, 2), but the loop tries to access `arr[3]` when `n` is 3.",
+          "approxLine": 7,
+          "snippet": "for (int i = 0; i <= n; i++)"
+        }
+      ],
+      "fixes": [
+        {
+          "message": "Change the loop condition in the `sum` function from `i <= n` to `i < n`.",
+          "reason": "To prevent out-of-bounds array access. If `n` represents the number of elements, valid indices are `0` to `n-1`. The original condition `i <= n` would attempt to access `n+1` elements, going one element past the end of the array."
+        }
+      ],
+      "correctedCode": "#include <iostream>\nusing namespace std;\n\nint sum(int* a, int n) {\n    int s = 0;\n    // Fix: Changed loop condition from i <= n to i < n to prevent out-of-bounds access.\n    // For an array of size n, valid indices are 0 to n-1.\n    for (int i = 0; i < n; i++) {\n        s += *(a + i);\n    }\n    return s;\n}\n\nint main() {\n    int arr[3] = {2, 4, 6};\n    cout << sum(arr, 3);\n}",
+      "optimizedCode": null
+    },
+    "model": "gemini-2.5-flash",
+    "createdAt": "2026-02-07T06:03:01.984Z"
   }
 ]

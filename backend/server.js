@@ -7,6 +7,8 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const axios = require('axios');
 const fs = require('fs');
+const os = require('os');
+const { spawn } = require('child_process');
 
 const app = express();
 app.use(cors());
@@ -145,6 +147,183 @@ function buildPrompt({ code, language }) {
   ].join('\n');
 }
 
+function detectLanguageFromCode(code) {
+  const text = String(code || '');
+  const lines = text.split(/\r?\n/).slice(0, 50).join('\n');
+
+  if (/#include\s+[<"].+[>"]/.test(lines) || /\bstd::\b/.test(lines)) return 'cpp';
+  if (/^\s*package\s+\w+/m.test(lines) || /\bpublic\s+class\b/.test(lines)) return 'java';
+  if (/^\s*def\s+\w+\(.*\)\s*:/m.test(lines) || /^\s*import\s+\w+/m.test(lines)) return 'python';
+  if (/\binterface\s+\w+/.test(lines) || /:\s*(string|number|boolean|any|unknown|never)\b/.test(lines)) return 'typescript';
+  if (/^\s*func\s+\w+\(.*\)\s*\{/m.test(lines) || /\bfmt\.(Print|Println|Printf)\b/.test(lines)) return 'go';
+  return 'javascript';
+}
+
+async function runWithTimeout(command, args, { cwd, timeoutMs }) {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd, windowsHide: true });
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      reject(new Error(`Command timed out: ${command} ${args.join(' ')}`));
+    }, timeoutMs);
+
+    child.stdout.on('data', d => (stdout += d.toString()));
+    child.stderr.on('data', d => (stderr += d.toString()));
+
+    child.on('error', err => {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+
+    child.on('close', code => {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
+      resolve({ exitCode: code, stdout, stderr });
+    });
+  });
+}
+
+async function runPythonSyntaxCheck(code) {
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'fixifyai-'));
+  const filePath = path.join(tmpDir, 'snippet.py');
+  await fs.promises.writeFile(filePath, code, 'utf8');
+
+  const candidates = [
+    { cmd: 'python', args: ['-m', 'py_compile', filePath] },
+    { cmd: 'py', args: ['-3', '-m', 'py_compile', filePath] }
+  ];
+
+  try {
+    for (const c of candidates) {
+      try {
+        const res = await runWithTimeout(c.cmd, c.args, { cwd: tmpDir, timeoutMs: 4000 });
+        if (res.exitCode === 0) return [];
+        const msg = (res.stderr || res.stdout || '').trim();
+        return msg ? [msg] : ['Python syntax check failed.'];
+      } catch (_) {}
+    }
+    return ['Python is not available on PATH for syntax checking.'];
+  } finally {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function runCpplintIfAvailable(code) {
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'fixifyai-'));
+  const filePath = path.join(tmpDir, 'snippet.cpp');
+  await fs.promises.writeFile(filePath, code, 'utf8');
+
+  const candidates = [
+    { cmd: 'cpplint', args: [filePath] },
+    { cmd: 'python', args: ['-m', 'cpplint', filePath] },
+    { cmd: 'py', args: ['-3', '-m', 'cpplint', filePath] }
+  ];
+
+  try {
+    for (const c of candidates) {
+      try {
+        const res = await runWithTimeout(c.cmd, c.args, { cwd: tmpDir, timeoutMs: 5000 });
+        const output = `${res.stdout}\n${res.stderr}`.trim();
+        if (!output) return [];
+        return output.split(/\r?\n/).slice(0, 10);
+      } catch (_) {}
+    }
+    return ['cpplint is not installed (optional).'];
+  } finally {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function runEslintIfAvailable(code, language) {
+  let Linter;
+  try {
+    ({ Linter } = require('eslint'));
+  } catch (_) {
+    return [{ type: 'other', severity: 'low', message: 'eslint is not installed (optional).' }];
+  }
+
+  const linter = new Linter();
+
+  let parser;
+  if (language === 'typescript') {
+    try {
+      parser = require('@typescript-eslint/parser');
+    } catch (_) {
+      return [{ type: 'other', severity: 'low', message: '@typescript-eslint/parser is not installed (optional).' }];
+    }
+  }
+
+  const config = {
+    env: { es2021: true, browser: true, node: true },
+    parser: parser || undefined,
+    parserOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module'
+    },
+    rules: {
+      'no-undef': 2,
+      'no-unused-vars': 1,
+      'no-unreachable': 2,
+      'no-redeclare': 2,
+      'no-const-assign': 2,
+      'no-func-assign': 2,
+      'no-dupe-args': 2,
+      'no-dupe-keys': 2,
+      eqeqeq: 1,
+      'no-debugger': 1,
+      'no-empty': 1
+    }
+  };
+
+  let messages = [];
+  try {
+    messages = linter.verify(code, config);
+  } catch (e) {
+    return [{ type: 'syntax', severity: 'high', message: e?.message || String(e) }];
+  }
+
+  const codeLines = String(code || '').split(/\r?\n/);
+  return messages.map(m => {
+    const severity = m.severity === 2 ? 'high' : 'medium';
+    const line = typeof m.line === 'number' ? m.line : undefined;
+    const snippet = line ? (codeLines[line - 1] || '').trim().slice(0, 160) : undefined;
+    const rule = m.ruleId ? `${m.ruleId}: ` : '';
+    return {
+      type: 'bad_practice',
+      severity,
+      message: `${rule}${m.message}`,
+      approxLine: line,
+      snippet
+    };
+  });
+}
+
+async function runStaticAnalysis({ code, language }) {
+  if (process.env.NODE_ENV === 'test') return [];
+  if (language === 'python') {
+    const findings = await runPythonSyntaxCheck(code);
+    return findings.map(m => ({ type: 'syntax', severity: 'high', message: m }));
+  }
+  if (language === 'cpp') {
+    const findings = await runCpplintIfAvailable(code);
+    return findings.map(m => ({ type: 'bad_practice', severity: 'low', message: m }));
+  }
+  if (language === 'javascript' || language === 'typescript') {
+    return runEslintIfAvailable(code, language);
+  }
+  return [];
+}
+
 function safeJsonParse(text) {
   try {
     return { ok: true, value: JSON.parse(text) };
@@ -216,7 +395,13 @@ async function generateReport({ code, language }) {
     throw err;
   }
 
-  const prompt = buildPrompt({ code, language });
+  const staticProblems = await runStaticAnalysis({ code, language });
+  const prompt = [
+    buildPrompt({ code, language }),
+    '',
+    'Static analysis findings (may be empty):',
+    staticProblems.length ? staticProblems.map(p => `- [${p.severity}] (${p.type}) ${p.message}`).join('\n') : '(none)'
+  ].join('\n');
 
   const preferredModel = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
   const fallbackModels = [
@@ -299,7 +484,11 @@ async function generateReport({ code, language }) {
     };
   }
 
-  return { model: usedModel, report: normalizeReport(parsed.value, { language }), rawText: text };
+  const normalized = normalizeReport(parsed.value, { language });
+  if (staticProblems.length) {
+    normalized.detectedProblems = [...staticProblems, ...normalized.detectedProblems];
+  }
+  return { model: usedModel, report: normalized, rawText: text };
 }
 
 function getProviderErrorMessage(error) {
@@ -314,11 +503,13 @@ function getProviderErrorMessage(error) {
 
 // === POST /api/fix ===
 app.post('/api/fix', async (req, res) => {
-  const { code, language } = req.body;
-  if (!code || !language) return res.status(400).json({ error: 'Code and language required' });
-  if (typeof code !== 'string' || typeof language !== 'string') {
+  const { code } = req.body;
+  let { language } = req.body;
+  if (!code) return res.status(400).json({ error: 'Code required' });
+  if (typeof code !== 'string' || (language != null && typeof language !== 'string')) {
     return res.status(400).json({ error: 'Invalid payload' });
   }
+  if (!language || language === 'auto') language = detectLanguageFromCode(code);
   if (!SUPPORTED_LANGUAGES.has(language)) {
     return res.status(400).json({ error: `Unsupported language: ${language}` });
   }
@@ -347,11 +538,13 @@ app.post('/api/fix', async (req, res) => {
 });
 
 app.post('/api/analyze', async (req, res) => {
-  const { code, language } = req.body;
-  if (!code || !language) return res.status(400).json({ error: 'Code and language required' });
-  if (typeof code !== 'string' || typeof language !== 'string') {
+  const { code } = req.body;
+  let { language } = req.body;
+  if (!code) return res.status(400).json({ error: 'Code required' });
+  if (typeof code !== 'string' || (language != null && typeof language !== 'string')) {
     return res.status(400).json({ error: 'Invalid payload' });
   }
+  if (!language || language === 'auto') language = detectLanguageFromCode(code);
   if (!SUPPORTED_LANGUAGES.has(language)) {
     return res.status(400).json({ error: `Unsupported language: ${language}` });
   }

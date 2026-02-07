@@ -8,9 +8,11 @@
     "test": "jest"
   },
   "dependencies": {
+    "@typescript-eslint/parser": "^7.18.0",
     "axios": "^1.7.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "eslint": "^8.57.1",
     "express": "^4.21.0",
     "mongoose": "^8.7.0"
   },
