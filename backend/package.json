@@ -14,7 +14,9 @@
     "dotenv": "^16.4.5",
     "eslint": "^8.57.1",
     "express": "^4.21.0",
-    "mongoose": "^8.7.0"
+    "json5": "^2.2.3",
+    "mongoose": "^8.7.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "jest": "^29.7.0",

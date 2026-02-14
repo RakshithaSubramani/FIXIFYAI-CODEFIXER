@@ -65,6 +65,89 @@ describe('API', () => {
     expect(res.body.report).toHaveProperty('correctedCode');
   });
 
+  test('POST /api/analyze accepts new JSON keys (problems/corrected/optimized)', async () => {
+    axios.post.mockResolvedValue({
+      data: {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    analysis: 'ok',
+                    problems: [{ type: 'syntax', severity: 'high', message: 'Example problem', approxLine: 1 }],
+                    fixes: [{ message: 'Do X', reason: 'Because Y' }],
+                    corrected: 'console.log("fixed");',
+                    optimized: null
+                  })
+                }
+              ]
+            }
+          }
+        ]
+      }
+    });
+
+    const res = await request(app)
+      .post('/api/analyze')
+      .send({ code: 'console.log("bug");', language: 'javascript' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.report).toHaveProperty('detectedProblems');
+    expect(res.body.report.detectedProblems[0]).toHaveProperty('message', 'Example problem');
+    expect(res.body.report).toHaveProperty('correctedCode', 'console.log("fixed");');
+    expect(res.body.report).toHaveProperty('optimizedCode', null);
+  });
+
+  test('POST /api/analyze repairs invalid JSON by re-prompting', async () => {
+    axios.post
+      .mockResolvedValueOnce({
+        data: {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: 'THIS IS NOT JSON'
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      })
+      .mockResolvedValueOnce({
+        data: {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      analysis: 'repaired',
+                      problems: [],
+                      fixes: [],
+                      corrected: 'console.log("fixed");',
+                      optimized: null
+                    })
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      });
+
+    const res = await request(app)
+      .post('/api/analyze')
+      .send({ code: 'console.log("bug");', language: 'javascript' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.report).toHaveProperty('analysis', 'repaired');
+    expect(res.body.report).toHaveProperty('correctedCode', 'console.log("fixed");');
+    expect(axios.post).toHaveBeenCalledTimes(2);
+  });
+
   test('POST /api/analyze falls back when model is not found', async () => {
     process.env.GEMINI_MODEL = 'gemini-pro';
 

@@ -9,6 +9,8 @@ const axios = require('axios');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
+const { z } = require('zod');
+const JSON5 = require('json5');
 
 const app = express();
 app.use(cors());
@@ -121,29 +123,63 @@ const FixSchema = new mongoose.Schema({
 });
 const Fix = mongoose.model('Fix', FixSchema);
 
-function buildPrompt({ code, language }) {
+function buildPrompt({ code, language, mode = 'standard' }) {
+  const isOptimization = mode === 'optimization';
+  
   return [
-    'You are an advanced Code Debugger and Code Explainer AI.',
+    'You are an advanced Code Debugger and Code Explainer AI (Fixify AI).',
     '',
     'Rules:',
     '- Analyze ONLY the provided code. Do not invent missing files or functions.',
     '- Preserve the user’s coding style unless it is a bad practice.',
     '- Include comments in corrected code to show what changed.',
     '- Be concise, accurate, and developer-friendly.',
+    '- Provide a quality score (A-F) based on maintainability, readability, and complexity.',
+    '- Provide confidence scores (0-100%) for each detected problem/fix.',
     '',
-    'Return ONLY valid JSON (no markdown, no code fences) matching this shape:',
+    `Language: ${language}`,
+    `Mode: ${mode}`,
+    '',
+    'Code:',
+    code,
+    '',
+    '--------------------------------------------------------------------------------',
+    'CRITICAL INSTRUCTION: Return ONLY valid JSON (no markdown, no code fences, no introductory text) matching this shape:',
     '{',
     '  "analysis": string,',
-    '  "detectedProblems": Array<{ type: "syntax"|"logic"|"performance"|"bad_practice"|"security"|"other", severity: "low"|"medium"|"high", message: string, approxLine?: number, snippet?: string }>,',
+    '  "problems": Array<{ type: "syntax"|"logic"|"performance"|"bad_practice"|"security"|"other", severity: "low"|"medium"|"high", message: string, approxLine?: number, snippet?: string }>,',
     '  "fixes": Array<{ message: string, reason: string }>,',
-    '  "correctedCode": string,',
-    '  "optimizedCode": string | null',
+    '  "corrected_code": string,',
+    '  "optimized_code": string,',
+    '  "quality_score": "A" | "B" | "C" | "D" | "E" | "F",',
+    '  "confidence_scores": Array<{ problem_index: number, score: number }>',
+    '}',
+    'Make sure the response starts with { and ends with }'
+  ].join('\n');
+}
+
+function buildJsonRepairPrompt({ badText, language }) {
+  const clipped = String(badText || '').slice(0, 12000);
+  return [
+    'You returned invalid JSON.',
+    'Fix it and return ONLY valid JSON (no markdown, no code fences, no introductory text).',
+    'Use this exact shape:',
+    '{',
+    '  "analysis": string,',
+    '  "problems": Array<{ type: "syntax"|"logic"|"performance"|"bad_practice"|"security"|"other", severity: "low"|"medium"|"high", message: string, approxLine?: number, snippet?: string }>,',
+    '  "fixes": Array<{ message: string, reason: string }>,',
+    '  "corrected_code": string,',
+    '  "optimized_code": string,',
+    '  "quality_score": string,',
+    '  "confidence_scores": Array<{ problem_index: number, score: number }>',
     '}',
     '',
     `Language: ${language}`,
     '',
-    'Code:',
-    code
+    'Invalid output:',
+    clipped,
+    '--------------------------------------------------------------------------------',
+    'CRITICAL: Return ONLY valid JSON starting with { and ending with }'
   ].join('\n');
 }
 
@@ -325,25 +361,51 @@ async function runStaticAnalysis({ code, language }) {
 }
 
 function safeJsonParse(text) {
+  // 1. Try simple clean (remove markdown fences)
+  let cleaned = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+  
+  // 2. Try JSON5 parse (handles comments, trailing commas, single quotes)
   try {
-    return { ok: true, value: JSON.parse(text) };
-  } catch (e) {
-    return { ok: false, error: e };
+    return { ok: true, value: JSON5.parse(cleaned) };
+  } catch (e1) {
+    // 3. Try extracting the first outer JSON object if the simple clean failed
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return { ok: true, value: JSON5.parse(match[0]) };
+      } catch (e2) {
+        // 4. Last resort: specific cleanup for common LLM JSON errors
+        try {
+          // Remove potential explanatory text before/after braces that wasn't caught
+          let tricky = match[0];
+          // Sometimes models output "Detected Problems: [...]" inside the JSON which isn't valid
+          // This is a best-effort blind parse
+          return { ok: true, value: JSON5.parse(tricky) };
+        } catch (e3) {
+          return { ok: false, error: e2 };
+        }
+      }
+    }
+    return { ok: false, error: e1 };
   }
 }
 
 function normalizeReport(report, { language }) {
+  const problemsRaw = report?.detectedProblems ?? report?.problems ?? report?.issues;
+  const correctedRaw = report?.correctedCode ?? report?.corrected;
+  const optimizedRaw = report?.optimizedCode ?? report?.optimized;
+  const qualityScoreRaw = report?.quality_score ?? report?.qualityScore ?? 'C';
+  const confidenceScoresRaw = report?.confidence_scores ?? report?.confidenceScores ?? [];
+
   const normalized = {
     analysis: typeof report?.analysis === 'string' ? report.analysis : '',
-    detectedProblems: Array.isArray(report?.detectedProblems) ? report.detectedProblems : [],
+    detectedProblems: Array.isArray(problemsRaw) ? problemsRaw : [],
     fixes: Array.isArray(report?.fixes) ? report.fixes : [],
-    correctedCode: typeof report?.correctedCode === 'string' ? report.correctedCode : '',
-    optimizedCode:
-      typeof report?.optimizedCode === 'string'
-        ? report.optimizedCode
-        : report?.optimizedCode == null
-          ? null
-          : String(report.optimizedCode)
+    // Check both snake_case (prompt default) and camelCase (legacy)
+    correctedCode: typeof correctedRaw === 'string' ? correctedRaw : (report?.corrected_code || ''),
+    optimizedCode: typeof optimizedRaw === 'string' ? optimizedRaw : (report?.optimized_code || null),
+    quality_score: typeof qualityScoreRaw === 'string' ? qualityScoreRaw : 'C',
+    confidence_scores: Array.isArray(confidenceScoresRaw) ? confidenceScoresRaw : []
   };
 
   normalized.detectedProblems = normalized.detectedProblems
@@ -388,7 +450,7 @@ function reportToLegacyExplanation(report) {
   ].join('\n');
 }
 
-async function generateReport({ code, language }) {
+async function generateReport({ code, language, modelPreference = 'balanced' }) {
   if (!process.env.GEMINI_API_KEY) {
     const err = new Error('GEMINI_API_KEY is missing');
     err.code = 'MISSING_GEMINI_API_KEY';
@@ -396,14 +458,18 @@ async function generateReport({ code, language }) {
   }
 
   const staticProblems = await runStaticAnalysis({ code, language });
+  
+  // Map preference to model
+  let preferredModel = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+  if (modelPreference === 'fast') preferredModel = 'gemini-1.5-flash';
+  else if (modelPreference === 'accurate') preferredModel = 'gemini-1.5-pro';
+  
   const prompt = [
-    buildPrompt({ code, language }),
+    buildPrompt({ code, language, mode: modelPreference === 'accurate' ? 'optimization' : 'standard' }),
     '',
     'Static analysis findings (may be empty):',
     staticProblems.length ? staticProblems.map(p => `- [${p.severity}] (${p.type}) ${p.message}`).join('\n') : '(none)'
   ].join('\n');
-
-  const preferredModel = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
   const fallbackModels = [
     'gemini-1.5-flash',
     'gemini-1.5-pro',
@@ -411,19 +477,19 @@ async function generateReport({ code, language }) {
     'gemini-2.0-flash-lite'
   ].filter(m => m && m !== preferredModel);
 
-  const requestBody = {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 2048,
-      responseMimeType: 'application/json'
-    }
+  const generationConfig = {
+    temperature: 0.2,
+    maxOutputTokens: 8192,
+    responseMimeType: 'application/json'
   };
 
-  async function callModel(modelName) {
+  async function callModel(modelName, promptText) {
     const aiRes = await axios.post(
       `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      requestBody
+      {
+        contents: [{ parts: [{ text: promptText }] }],
+        generationConfig
+      }
     );
     return aiRes;
   }
@@ -431,7 +497,7 @@ async function generateReport({ code, language }) {
   let aiRes;
   let usedModel = preferredModel;
   try {
-    aiRes = await callModel(preferredModel);
+    aiRes = await callModel(preferredModel, prompt);
   } catch (error) {
     const status = error?.response?.status;
     const providerMessage =
@@ -450,7 +516,7 @@ async function generateReport({ code, language }) {
     let lastError = error;
     for (const candidate of fallbackModels) {
       try {
-        aiRes = await callModel(candidate);
+        aiRes = await callModel(candidate, prompt);
         usedModel = candidate;
         lastError = null;
         break;
@@ -462,12 +528,43 @@ async function generateReport({ code, language }) {
   }
 
   const text = aiRes?.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  console.log('--- RAW AI OUTPUT START ---');
+  console.log(text);
+  console.log('--- RAW AI OUTPUT END ---');
+
   if (!text || typeof text !== 'string') {
     return { model: usedModel, report: normalizeReport({}, { language }), rawText: '' };
   }
 
   const parsed = safeJsonParse(text);
   if (!parsed.ok) {
+    console.log('JSON Parse Failed:', parsed.error.message);
+    try {
+      console.log('Attempting Repair...');
+      const repairPrompt = buildJsonRepairPrompt({ badText: text, language });
+      const repairRes = await callModel(usedModel, repairPrompt);
+      const repairedText = repairRes?.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      console.log('--- REPAIRED AI OUTPUT START ---');
+      console.log(repairedText);
+      console.log('--- REPAIRED AI OUTPUT END ---');
+
+      if (repairedText && typeof repairedText === 'string') {
+          const repairedParsed = safeJsonParse(repairedText);
+          if (repairedParsed.ok) {
+            const normalized = normalizeReport(repairedParsed.value, { language });
+            if (staticProblems.length) {
+              normalized.detectedProblems = [...staticProblems, ...normalized.detectedProblems];
+            }
+            return { model: usedModel, report: normalized, rawText: repairedText };
+          } else {
+            console.log('Repair Parse Failed:', repairedParsed.error.message);
+          }
+        }
+    } catch (err) {
+      console.error('Repair failed:', err);
+    }
+
     return {
       model: usedModel,
       report: normalizeReport(
@@ -501,24 +598,28 @@ function getProviderErrorMessage(error) {
   return String(msg).slice(0, 500);
 }
 
+const FixRequestSchema = z.object({
+  code: z.string().min(1).max(MAX_CODE_CHARS),
+  language: z.string().optional(),
+  modelPreference: z.enum(['fast', 'accurate', 'balanced']).optional().default('balanced')
+});
+
 // === POST /api/fix ===
 app.post('/api/fix', async (req, res) => {
-  const { code } = req.body;
-  let { language } = req.body;
-  if (!code) return res.status(400).json({ error: 'Code required' });
-  if (typeof code !== 'string' || (language != null && typeof language !== 'string')) {
-    return res.status(400).json({ error: 'Invalid payload' });
+  const result = FixRequestSchema.safeParse(req.body);
+  if (!result.success) {
+    return res.status(400).json({ error: 'Invalid payload', details: result.error.errors });
   }
+
+  let { code, language, modelPreference } = result.data;
+
   if (!language || language === 'auto') language = detectLanguageFromCode(code);
   if (!SUPPORTED_LANGUAGES.has(language)) {
     return res.status(400).json({ error: `Unsupported language: ${language}` });
   }
-  if (code.length > MAX_CODE_CHARS) {
-    return res.status(400).json({ error: `Code too large (max ${MAX_CODE_CHARS} characters)` });
-  }
 
   try {
-    const { model, report } = await generateReport({ code, language });
+    const { model, report } = await generateReport({ code, language, modelPreference });
 
     const fixedCode = report.correctedCode;
     const explanation = reportToLegacyExplanation(report);
@@ -538,22 +639,20 @@ app.post('/api/fix', async (req, res) => {
 });
 
 app.post('/api/analyze', async (req, res) => {
-  const { code } = req.body;
-  let { language } = req.body;
-  if (!code) return res.status(400).json({ error: 'Code required' });
-  if (typeof code !== 'string' || (language != null && typeof language !== 'string')) {
-    return res.status(400).json({ error: 'Invalid payload' });
+  const result = FixRequestSchema.safeParse(req.body);
+  if (!result.success) {
+    return res.status(400).json({ error: 'Invalid payload', details: result.error.errors });
   }
+  
+  let { code, language, modelPreference } = result.data;
+
   if (!language || language === 'auto') language = detectLanguageFromCode(code);
   if (!SUPPORTED_LANGUAGES.has(language)) {
     return res.status(400).json({ error: `Unsupported language: ${language}` });
   }
-  if (code.length > MAX_CODE_CHARS) {
-    return res.status(400).json({ error: `Code too large (max ${MAX_CODE_CHARS} characters)` });
-  }
 
   try {
-    const { model, report } = await generateReport({ code, language });
+    const { model, report } = await generateReport({ code, language, modelPreference });
     const doc = {
       originalCode: code,
       language,

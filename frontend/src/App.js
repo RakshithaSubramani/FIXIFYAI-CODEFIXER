@@ -1,21 +1,34 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import DiffViewer from 'react-diff-viewer-continued';
+import Editor from '@monaco-editor/react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import LandingPage from './LandingPage';
 import './App.css';
 
 function App() {
+  const [showLanding, setShowLanding] = useState(true);
   const [code, setCode] = useState('');
   const [language, setLanguage] = useState('javascript');
   const [autoDetect, setAutoDetect] = useState(false);
+  const [modelPreference, setModelPreference] = useState('balanced');
   const [fixedCode, setFixedCode] = useState('');
   const [explanation, setExplanation] = useState('');
   const [report, setReport] = useState(null);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [theme, setTheme] = useState('dark');
 
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+
+  useEffect(() => {
+    document.body.className = theme === 'light' ? 'light-theme' : '';
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+  };
 
   const detectLanguage = (text) => {
     const lines = String(text || '').split(/\r?\n/).slice(0, 50).join('\n');
@@ -33,7 +46,13 @@ function App() {
       setLoading(true);
       const langToSend = autoDetect ? detectLanguage(code) : language;
       if (autoDetect) setLanguage(langToSend);
-      const { data } = await axios.post(`${API_URL}/api/fix`, { code, language: langToSend });
+      
+      const { data } = await axios.post(`${API_URL}/api/fix`, { 
+        code, 
+        language: langToSend,
+        modelPreference
+      });
+      
       const nextReport = data.report || null;
       setReport(nextReport);
       setFixedCode(nextReport?.correctedCode || data.fixedCode || '');
@@ -61,44 +80,83 @@ function App() {
     return 'severity-medium';
   };
 
+  const getConfidenceScore = (index) => {
+    if (!report?.confidence_scores) return 0;
+    const item = report.confidence_scores.find(c => c.problem_index === index);
+    return item ? item.score : 0;
+  };
+
+  if (showLanding) {
+    return <LandingPage onStart={() => setShowLanding(false)} />;
+  }
+
   return (
     <div className="app-container">
+      <button className="theme-toggle" onClick={toggleTheme} title="Toggle Theme">
+        {theme === 'dark' ? '☀️' : '🌙'}
+      </button>
+
       <header className="header">
         <h1>FIXIFYAI</h1>
-        <p className="tagline">AI-Powered Code Debugger & Optimizer</p>
+        <p className="tagline">Enterprise AI Code Debugger</p>
       </header>
 
       <div className="input-section">
-        <label className="input-label">
-          <span className="label-icon">📝</span>
-          Select Language
-        </label>
-        <select value={language} onChange={e => setLanguage(e.target.value)}>
-          <option value="javascript">JavaScript</option>
-          <option value="python">Python</option>
-          <option value="java">Java</option>
-          <option value="cpp">C++</option>
-          <option value="go">Go</option>
-          <option value="typescript">TypeScript</option>
-        </select>
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={autoDetect}
-            onChange={(e) => setAutoDetect(e.target.checked)}
-          />
-          Auto-detect language from code
-        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+          <div>
+            <label className="input-label">
+              <span className="label-icon">📝</span>
+              Language
+            </label>
+            <select value={language} onChange={e => setLanguage(e.target.value)}>
+              <option value="javascript">JavaScript</option>
+              <option value="typescript">TypeScript</option>
+              <option value="python">Python</option>
+              <option value="java">Java</option>
+              <option value="cpp">C++</option>
+              <option value="go">Go</option>
+            </select>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={autoDetect}
+                onChange={(e) => setAutoDetect(e.target.checked)}
+              />
+              Auto-detect
+            </label>
+          </div>
+          <div>
+            <label className="input-label">
+              <span className="label-icon">⚙️</span>
+              Model Mode
+            </label>
+            <select value={modelPreference} onChange={e => setModelPreference(e.target.value)}>
+              <option value="fast">Fast (Flash)</option>
+              <option value="balanced">Balanced</option>
+              <option value="accurate">Accurate (Pro)</option>
+            </select>
+          </div>
+        </div>
 
         <label className="input-label">
           <span className="label-icon">💻</span>
           Your Code
         </label>
-        <textarea
-          placeholder="// Paste your buggy code here...&#10;// FIXIFYAI will analyze, debug, and optimize it for you."
-          value={code}
-          onChange={e => setCode(e.target.value)}
-        />
+        <div className="monaco-wrapper">
+          <Editor
+            height="300px"
+            language={language}
+            theme={theme === 'dark' ? 'vs-dark' : 'light'}
+            value={code}
+            onChange={(value) => setCode(value || '')}
+            options={{
+              minimap: { enabled: false },
+              fontSize: 14,
+              scrollBeyondLastLine: false,
+              automaticLayout: true
+            }}
+          />
+        </div>
 
         <div className="button-group">
           <button className="btn-primary" onClick={handleFix} disabled={loading}>
@@ -123,16 +181,18 @@ function App() {
 
       {(report || fixedCode) && (
         <div className="results-section">
-          {report?.analysis && (
-            <div className="result-card">
-              <h2>
+          {report?.quality_score && (
+            <div className="result-card" style={{ position: 'relative' }}>
+               <div className="quality-score-container">
+                 <div className="quality-grade">{report.quality_score}</div>
+                 <div className="quality-label">Quality Score</div>
+               </div>
+               <h2>
                 <span className="section-icon">🔍</span>
                 Analysis
               </h2>
-              <div className="card-content">
-                <p style={{ whiteSpace: 'pre-wrap', background: 'transparent', padding: '0', borderRadius: '0' }}>
-                  {report.analysis}
-                </p>
+              <div className="card-content" style={{ paddingRight: '100px' }}>
+                <p style={{ whiteSpace: 'pre-wrap' }}>{report.analysis}</p>
               </div>
             </div>
           )}
@@ -160,6 +220,18 @@ function App() {
                         {p.snippet && <code className="snippet">{p.snippet}</code>}
                       </div>
                     )}
+                    <div className="confidence-section">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        <span>AI Confidence</span>
+                        <span>{getConfidenceScore(idx) || 90}%</span>
+                      </div>
+                      <div className="confidence-bar-container">
+                        <div 
+                          className="confidence-bar" 
+                          style={{ width: `${getConfidenceScore(idx) || 90}%` }}
+                        />
+                      </div>
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -193,18 +265,19 @@ function App() {
                   <span className="section-icon">✨</span>
                   Corrected Code
                 </h2>
-                <div className="code-block">
-                  <SyntaxHighlighter 
-                    language={language} 
-                    style={oneDark}
-                    customStyle={{
-                      margin: 0,
-                      borderRadius: '8px',
-                      fontSize: '0.875rem',
+                <div className="monaco-wrapper">
+                  <Editor
+                    height="400px"
+                    language={language}
+                    theme={theme === 'dark' ? 'vs-dark' : 'light'}
+                    value={fixedCode}
+                    options={{
+                      readOnly: true,
+                      minimap: { enabled: false },
+                      fontSize: 14,
+                      scrollBeyondLastLine: false
                     }}
-                  >
-                    {fixedCode}
-                  </SyntaxHighlighter>
+                  />
                 </div>
               </div>
 
@@ -218,25 +291,17 @@ function App() {
                     oldValue={code} 
                     newValue={fixedCode} 
                     splitView={true}
-                    useDarkTheme={true}
+                    useDarkTheme={theme === 'dark'}
                     leftTitle="Original Code"
                     rightTitle="Fixed Code"
                     styles={{
                       variables: {
                         dark: {
-                          diffViewerBackground: '#161b22',
-                          addedBackground: '#1c4428',
-                          addedColor: '#3fb950',
-                          removedBackground: '#4d1f23',
-                          removedColor: '#f85149',
-                          wordAddedBackground: '#26522e',
-                          wordRemovedBackground: '#6e2b2d',
-                          addedGutterBackground: '#1c4428',
-                          removedGutterBackground: '#4d1f23',
-                          gutterBackground: '#161b22',
-                          gutterBackgroundDark: '#0d1117',
-                          highlightBackground: '#21262d',
-                          highlightGutterBackground: '#21262d',
+                          diffViewerBackground: '#1e1e1e',
+                          addedBackground: '#044B53',
+                          addedColor: 'white',
+                          removedBackground: '#632F34',
+                          removedColor: 'white',
                         }
                       }
                     }}
@@ -246,38 +311,25 @@ function App() {
             </>
           )}
 
-          {!report && explanation && (
-            <div className="result-card">
-              <h2>
-                <span className="section-icon">💡</span>
-                Explanation
-              </h2>
-              <div className="card-content">
-                <p style={{ whiteSpace: 'pre-wrap', background: 'transparent', padding: '0' }}>
-                  {explanation}
-                </p>
-              </div>
-            </div>
-          )}
-
           {report?.optimizedCode && (
             <div className="result-card optimized">
               <h2>
                 <span className="section-icon">⚡</span>
                 Optimized Code
               </h2>
-              <div className="code-block">
-                <SyntaxHighlighter 
-                  language={language} 
-                  style={oneDark}
-                  customStyle={{
-                    margin: 0,
-                    borderRadius: '8px',
-                    fontSize: '0.875rem',
+              <div className="monaco-wrapper">
+                <Editor
+                  height="400px"
+                  language={language}
+                  theme={theme === 'dark' ? 'vs-dark' : 'light'}
+                  value={report.optimizedCode}
+                  options={{
+                    readOnly: true,
+                    minimap: { enabled: false },
+                    fontSize: 14,
+                    scrollBeyondLastLine: false
                   }}
-                >
-                  {report.optimizedCode}
-                </SyntaxHighlighter>
+                />
               </div>
             </div>
           )}
@@ -312,7 +364,7 @@ function App() {
       </div>
 
       <footer className="footer">
-        <p>Built with ❤️ using React & AI</p>
+        <p>Built with ❤️ using React & Gemini AI</p>
       </footer>
     </div>
   );
