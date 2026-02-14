@@ -42,7 +42,11 @@ Before you begin, ensure you have the following installed:
 
 ### 1. Clone the Repository
 ```bash
+<<<<<<< HEAD
 git clone <repository-url>
+=======
+git clone https://github.com/RakshithaSubramani/FIXIFYAI-CODEFIXER.git
+>>>>>>> 946b8da (updated repo)
 cd FIXIFYAI-CODEFIXER
 ```
 

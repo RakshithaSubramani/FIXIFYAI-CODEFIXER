@@ -9,7 +9,7 @@ function LandingPage({ onStart }) {
         <nav>
           <a href="#features">Features</a>
           <a href="#architecture">Architecture</a>
-          <a href="https://github.com/your-repo" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a href="https://github.com/RakshithaSubramani/FIXIFYAI-CODEFIXER" target="_blank" rel="noopener noreferrer">GitHub</a>
         </nav>
       </header>
 
